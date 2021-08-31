@@ -2,7 +2,6 @@ version: 2.1
 
 jobs:
   backend:
-    resource_class: large
     docker:
       - image: circleci/python:3.7.3
     steps:
@@ -28,6 +27,52 @@ jobs:
       - run: DATABASE_NAME=wagtail.db pipenv run python -u runtests.py
 
   frontend:
+    docker:
+      - image: circleci/node:10
+    steps:
+      - checkout
+      - restore_cache:
+          keys:
+            - node-v1-{{ .Branch }}-{{ checksum "package-lock.json" }}
+            - node-v1-{{ .Branch }}-
+            - node-v1-
+      - run: npm install --no-save
+      - save_cache:
+          paths:
+            - ~/project/node_modules/
+          key: node-v1-{{ .Branch }}-{{ checksum "package-lock.json" }}
+      - run: npm run build
+      - run: npm run lint:js
+      - run: npm run lint:css
+      - run: npm run test:unit:coverage -- --runInBand
+      - run: npm run dist
+      - run: bash <(curl -s https://codecov.io/bash) -F frontend
+  backend_large:
+    resource_class: large
+    docker:
+      - image: circleci/python:3.7.3
+    steps:
+      - checkout
+      - restore_cache:
+          keys:
+            - pip-packages-v1-{{ .Branch }}
+            - pip-packages-v1-
+      - run: pipenv install -e .[testing]
+      - save_cache:
+          paths:
+            - ~/.local/
+          key: pip-package-v1-{{ .Branch }}
+      - run: pipenv run flake8
+      - run: pipenv run isort --check-only --diff .
+      # Filter out known false positives, while preserving normal output and error codes.
+      # See https://github.com/motet-a/jinjalint/issues/18.
+      # And https://circleci.com/docs/2.0/configuration-reference/#default-shell-options.
+      - run:
+          shell: /bin/bash -e
+          command: pipenv run jinjalint --parse-only wagtail | grep -v 'welcome_page.html:6:70' | tee /dev/tty | wc -l | grep -q '0'
+      - run: pipenv run doc8 docs
+      - run: DATABASE_NAME=wagtail.db pipenv run python -u runtests.py
+  frontend_large:
     resource_class: large
     docker:
       - image: circleci/node:10
@@ -59,6 +104,8 @@ workflows:
       jobs:
         - backend
         - frontend
+        - backend_large
+        - frontend_large
       triggers:
         - schedule:
             cron: 0 * * * *
